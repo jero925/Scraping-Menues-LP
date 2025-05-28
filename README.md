@@ -27,7 +27,13 @@ Este proyecto automatiza la extracción de los almuerzos disponibles en el siste
   ```
   
 ## 🧪 Ejecución
-Ejecutá el script principal con:
+Instalar dependencias de manera rápida con
+
+  ```bash
+  pip install -r requirements.txt
+  ```
+
+Ejecuta el script principal con:
 
   ```bash
   python main.py
