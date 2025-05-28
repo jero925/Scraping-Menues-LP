@@ -1,9 +1,20 @@
-import json
-import requests
+import logging
 from time import sleep
+import requests
 from dotenv import dotenv_values
 from playwright.sync_api import sync_playwright, Playwright
 
+# Configuración de logs
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.FileHandler("viandas.log"),
+        logging.StreamHandler()
+    ]
+)
+
+# Cargar variables de entorno
 env_values = dotenv_values(".env")
 
 EMAIL: str = env_values["EMAIL"]
@@ -23,20 +34,23 @@ def send_telegram_message(message: str) -> None:
     }
     response = requests.post(url, data=payload)
     if not response.ok:
-        print(f"Error al enviar mensaje: {response.text}")
+        logging.error(f"Error al enviar mensaje: {response.text}")
+    else:
+        logging.info("Mensaje enviado a Telegram correctamente.")
 
 def build_telegram_message(lunch_by_day: dict) -> str:
-    message_lines = ["<b>📅 Almuerzos disponibles</b>"]
+    message_lines = ["🍽️ <b>Almuerzos disponibles</b> 🍽️"]
     for day, data in lunch_by_day.items():
-        message_lines.append(f"\n<b>🍽️ {data['message']}</b>")
+        message_lines.append(f"\n📅 <b>{day}</b>\n📩 <i>{data['message']}</i>")
+        message_lines.append("🍛 <u>Menúes:</u>")
         for i, lunch in enumerate(data["lunches"], start=1):
-            message_lines.append(f"   <b>{i}.</b> {lunch}")
+            message_lines.append(f"  {i}. {lunch}")
     full_message = "\n".join(message_lines)
-    print(full_message)
+    logging.debug("Mensaje construido para Telegram:\n" + full_message)
     return full_message
 
-
 def run(playwright: Playwright) -> dict:
+    logging.info("Iniciando navegador y autenticación...")
     browser = playwright.chromium.launch()
     page = browser.new_page()
     page.goto(url=URL)
@@ -53,17 +67,14 @@ def run(playwright: Playwright) -> dict:
     # Espera a que los elementos de "categoría" se carguen
     page.is_visible('div.o_search_panel.flex-grow-0.flex-shrink-0.h-100.pb-5.bg-view.overflow-auto.pe-1.ps-3')
 
-    # Obtener almuerzos agrupados por día
+    logging.info("Extrayendo menús por día...")
     lunch_by_day = {}
     for day in DAYS:
         lunch_by_day[day] = get_lunches_by_day(page, day)
 
     browser.close()
-
-    # print(json.dumps(lunch_by_day, indent=2, ensure_ascii=False))
+    logging.info("Cierre del navegador.")
     return lunch_by_day
-
-
 
 def get_lunches_by_day(page, day) -> dict:
     checkbox = page.get_by_label(day)
@@ -88,7 +99,7 @@ def get_lunches_by_day(page, day) -> dict:
             name = name_span.inner_text().strip()
             lunches.append(name)
         except Exception as e:
-            print(f"Error al procesar un almuerzo: {e}")
+            logging.warning(f"Error al procesar un almuerzo: {e}")
 
     checkbox.click()
     return {
@@ -96,7 +107,12 @@ def get_lunches_by_day(page, day) -> dict:
         "lunches": lunches
     }
 
-with sync_playwright() as playwright:
-    lunch_by_day: dict = run(playwright)
-    message: str = build_telegram_message(lunch_by_day)
-    send_telegram_message(message=message)
+# Ejecutar
+if __name__ == "__main__":
+    with sync_playwright() as playwright:
+        try:
+            lunch_by_day: dict = run(playwright)
+            message: str = build_telegram_message(lunch_by_day)
+            send_telegram_message(message=message)
+        except Exception as e:
+            logging.critical(f"Error inesperado: {e}")

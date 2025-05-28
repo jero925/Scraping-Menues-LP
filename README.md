@@ -72,4 +72,4 @@ Error	Causa probable	Solución
 - Poder ordenar directamente desde el script
 - Ejecutar automáticamente con Task Scheduler (Windows) y/o servidor.
 - Alerta si no hay menúes cargados.
-- Logs persistentes.
+- ✅ Logs persistentes.
