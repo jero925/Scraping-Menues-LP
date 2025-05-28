@@ -1,4 +1,3 @@
-import datetime
 import json
 from time import sleep
 from dotenv import dotenv_values
