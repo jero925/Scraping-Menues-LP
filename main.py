@@ -1,4 +1,5 @@
 import json
+import requests
 from time import sleep
 from dotenv import dotenv_values
 from playwright.sync_api import sync_playwright, Playwright
@@ -11,7 +12,32 @@ TILE_NAME: str = 'Almuerzo'
 DAYS: list = ['Martes', 'Jueves']
 URL: str = "https://www.elepeservicios.com.ar/web/login"
 
-def run(playwright: Playwright):
+def send_telegram_message(message: str) -> None:
+    token = env_values["TELEGRAM_BOT_TOKEN"]
+    chat_id = env_values["TELEGRAM_CHAT_ID"]
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": message,
+        "parse_mode": "HTML"
+    }
+    response = requests.post(url, data=payload)
+    if not response.ok:
+        print(f"Error al enviar mensaje: {response.text}")
+
+def build_telegram_message(lunch_by_day: dict) -> str:
+    message_lines = ["--- Almuerzos disponibles ---"]
+    for day, data in lunch_by_day.items():
+        message_lines.append(f"-{data['message']}")
+        message_lines.append("Menúes:")
+        for i, lunch in enumerate(data["lunches"], start=1):
+            message_lines.append(f"{i}. {lunch}")
+    full_message = "\n".join(message_lines)
+    print(full_message)
+    return full_message
+
+
+def run(playwright: Playwright) -> dict:
     browser = playwright.chromium.launch()
     page = browser.new_page()
     page.goto(url=URL)
@@ -36,16 +62,11 @@ def run(playwright: Playwright):
     browser.close()
 
     # print(json.dumps(lunch_by_day, indent=2, ensure_ascii=False))
-    print("\n--- Almuerzos disponibles ---")
-    for day, data in lunch_by_day.items():
-        print(f"-{data['message']}")
-        print("Menúes:")
-        for i, lunch in enumerate(data['lunches'], start=1):
-            print(f"{i}. {lunch}")
+    return lunch_by_day
 
 
 
-def get_lunches_by_day(page, day):
+def get_lunches_by_day(page, day) -> dict:
     checkbox = page.get_by_label(day)
     checkbox.click()
     sleep(2)
@@ -77,4 +98,6 @@ def get_lunches_by_day(page, day):
     }
 
 with sync_playwright() as playwright:
-    run(playwright)
+    lunch_by_day: dict = run(playwright)
+    message: str = build_telegram_message(lunch_by_day)
+    send_telegram_message(message=message)
