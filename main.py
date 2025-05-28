@@ -26,12 +26,11 @@ def send_telegram_message(message: str) -> None:
         print(f"Error al enviar mensaje: {response.text}")
 
 def build_telegram_message(lunch_by_day: dict) -> str:
-    message_lines = ["--- Almuerzos disponibles ---"]
+    message_lines = ["<b>📅 Almuerzos disponibles</b>"]
     for day, data in lunch_by_day.items():
-        message_lines.append(f"-{data['message']}")
-        message_lines.append("Menúes:")
+        message_lines.append(f"\n<b>🍽️ {data['message']}</b>")
         for i, lunch in enumerate(data["lunches"], start=1):
-            message_lines.append(f"{i}. {lunch}")
+            message_lines.append(f"   <b>{i}.</b> {lunch}")
     full_message = "\n".join(message_lines)
     print(full_message)
     return full_message
