@@ -1,137 +1,69 @@
 import logging
-from time import sleep
-from typing import Dict, List
+from playwright.sync_api import sync_playwright
 
-import requests
-from dotenv import dotenv_values
-from playwright.sync_api import sync_playwright, Playwright, Page
+from config_loader import ConfigLoader
+from telegram_notifier import TelegramNotifier
+from lunch_scraper import LunchScraper # Nombre de clase LunchScraper consistente con tu modificación
 
-# Configuración de logs
+# Configuración de Logging
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(levelname)s - [%(filename)s:%(lineno)s %(name)s] - %(message)s",
     handlers=[
-        logging.FileHandler("viandas.log"),
+        logging.FileHandler("lunch_app.log"),
         logging.StreamHandler()
     ]
 )
-
-# Variables de entorno
-env = dotenv_values(".env")
+logger = logging.getLogger(__name__)
 
 
-class TelegramNotifier:
-    def __init__(self, token: str, chat_id: str) -> None:
-        self.token = token
-        self.chat_id = chat_id
-        self.api_url = f"https://api.telegram.org/bot{self.token}/sendMessage"
+def main():
+    """Función principal para ejecutar el script."""
+    logger.info("🚀 Iniciando aplicación de notificacion de almuerzos...")
 
-    def send_message(self, message: str) -> None:
-        payload = {
-            "chat_id": self.chat_id,
-            "text": message,
-            "parse_mode": "HTML"
-        }
-        response = requests.post(self.api_url, data=payload)
+    try:
+        config = ConfigLoader()
+        telegram_notifier = TelegramNotifier(
+            bot_token=config.telegram_bot_token,
+            chat_id=config.telegram_chat_id
+        )
+    except ValueError as e: 
+        logger.critical("Error de configuracion inicial: %s. Abortando.", e)
+        return
+    except Exception as e: 
+        logger.critical("Error inesperado durante la inicializacion: %s. Abortando.", e, exc_info=True)
+        return
 
-        if not response.ok:
-            logging.error(f"Error al enviar mensaje a Telegram: {response.text}")
+    daily_lunches_data = {}
+    with sync_playwright() as playwright_instance:
+        scraper = LunchScraper(playwright_instance, config)
+        try:
+            daily_lunches_data = scraper.scrape_lunches()
+        except Exception as e: 
+            logger.critical("Error irrecuperable durante la ejecucion del scraper: %s", e, exc_info=True)
+            error_message = f"⚠️ Error crítico en el bot de almuerzos. No se pudo completar el scraping. Detalles: {str(e)[:200]}"
+            telegram_notifier.send_message(error_message) # Usando send_message como en tu código
+            return
+
+    if not daily_lunches_data:
+        logger.warning("No se obtuvieron datos de almuerzos del scraper.")
+        telegram_notifier.send_message("No se pudo obtener informacion de los almuerzos hoy.")
+    else:
+        has_any_real_data = any(
+            (day_data.get('lunches') or day_data.get('period_message')) and not ("Error" in day_data.get('period_message', ''))
+            for day_data in daily_lunches_data.values()
+        )
+
+        if not has_any_real_data and not all(day_data.get('lunches') for day_data in daily_lunches_data.values()):
+            logger.info("No se encontraron almuerzos o todos los días tuvieron errores de extraccion.")
+            # Considera enviar una notificación si lo deseas:
+            # telegram_notifier.send_message("No se encontraron almuerzos disponibles o hubo problemas al obtenerlos.")
         else:
-            logging.info("Mensaje enviado a Telegram correctamente.")
+            logger.info("Datos de almuerzos extraidos. Preparando para enviar notificacion.")
+            message_to_send = telegram_notifier.format_lunches_message(daily_lunches_data)
+            telegram_notifier.send_message(message_to_send)
 
-
-class LunchScraper:
-    LOGIN_URL = "https://www.elepeservicios.com.ar/web/login"
-    TILE_NAME = "Almuerzo"
-    DAYS = ['Martes', 'Jueves']
-
-    def __init__(self, email: str, password: str) -> None:
-        self.email = email
-        self.password = password
-
-    def _login(self, page: Page) -> None:
-        page.goto(self.LOGIN_URL)
-        page.fill('input#login', self.email)
-        page.fill('input#password', self.password)
-        page.click('button[type=submit].btn.btn-primary')
-        page.is_visible('.col-3.col-md-2.o_draggable.mb-3.px-0')
-        page.get_by_text(self.TILE_NAME).click()
-        page.is_visible('div.o_search_panel.flex-grow-0.flex-shrink-0.h-100.pb-5.bg-view.overflow-auto.pe-1.ps-3')
-
-    def scrape_lunches(self, playwright: Playwright) -> Dict[str, Dict[str, List[str]]]:
-        logging.info("Iniciando navegador y autenticación...")
-        browser = playwright.chromium.launch()
-        page = browser.new_page()
-
-        try:
-            self._login(page)
-            logging.info("Extrayendo menús por día...")
-
-            lunch_by_day = {}
-            for day in self.DAYS:
-                lunch_by_day[day] = self._extract_lunches_by_day(page, day)
-
-            return lunch_by_day
-        finally:
-            browser.close()
-            logging.info("Navegador cerrado.")
-
-    def _extract_lunches_by_day(self, page: Page, day: str) -> Dict[str, List[str]]:
-        checkbox = page.get_by_label(day)
-        checkbox.click()
-        sleep(2)
-
-        lunch_cards = page.query_selector_all('div.o_kanban_record')
-        lunches = []
-        message = ""
-
-        for index, card in enumerate(lunch_cards):
-            try:
-                if index == 0:
-                    message_element = card.query_selector('.text-muted p')
-                    if message_element:
-                        message = message_element.inner_text().strip()
-
-                name_element = card.query_selector('strong span')
-                if name_element:
-                    name = name_element.inner_text().strip()
-                    lunches.append(name)
-            except Exception as e:
-                logging.warning(f"Error al procesar un almuerzo: {e}")
-
-        checkbox.click()
-        return {"message": message, "lunches": lunches}
-
-
-def format_telegram_message(lunch_by_day: Dict[str, Dict[str, List[str]]]) -> str:
-    lines = ["🍽️ <b>Almuerzos disponibles</b> 🍽️"]
-    for day, data in lunch_by_day.items():
-        lines.append(f"\n📅 <b>{day}</b>\n📩 <i>{data['message']}</i>")
-        lines.append("🍛 <u>Menúes:</u>")
-        for i, lunch in enumerate(data["lunches"], start=1):
-            lines.append(f"  {i}. {lunch}")
-    full_message = "\n".join(lines)
-    logging.debug("Mensaje para Telegram:\n" + full_message)
-    return full_message
-
-
-def main() -> None:
-    email = env["EMAIL"]
-    password = env["PASSWORD"]
-    bot_token = env["TELEGRAM_BOT_TOKEN"]
-    chat_id = env["TELEGRAM_CHAT_ID"]
-
-    scraper = LunchScraper(email, password)
-    notifier = TelegramNotifier(bot_token, chat_id)
-
-    with sync_playwright() as playwright:
-        try:
-            lunch_data = scraper.scrape_lunches(playwright)
-            message = format_telegram_message(lunch_data)
-            notifier.send_message(message)
-        except Exception as e:
-            logging.critical(f"Error inesperado en ejecución principal: {e}")
-
+    logger.info("🏁 Aplicacion de notificacion de almuerzos finalizada.")
 
 if __name__ == "__main__":
     main()
