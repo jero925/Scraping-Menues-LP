@@ -65,5 +65,5 @@ def get_lunches_by_day(page, day):
 
     checkbox.click()
 
-# with sync_playwright() as playwright:
-#     run(playwright)
+with sync_playwright() as playwright:
+    run(playwright)
